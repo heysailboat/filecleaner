@@ -1,0 +1,37 @@
+ai:
+  enabled: true
+  confidence_threshold: 0.75
+  batch_size: 6
+  use_local_fallback: false
+  local_model: llama3.2:3b
+  groq_model: llama3-8b-8192
+
+scan:
+  exclude_dirs:
+    - "*.Trash"
+    - "$RECYCLE.BIN"
+  max_file_size_mb: 1024
+  skip_hidden: false
+  checkpoint_interval: 500
+
+cleanup:
+  remove_empty_dirs: false
+  large_file_threshold_gb: 1
+  large_file_age_days: 365
+  auto_delete_after_days: 30  # for review folders
+
+whitelist:
+  patterns:
+    - "*recovery*"
+    - "*.key"
+    - "*.pem"
+    - "*.kdbx"
+    - "*password*"
+  paths:
+    - "~/Documents/important"
+    - "~/keys"
+
+performance:
+  parallel_hash_workers: 4
+  sqlite_cache: true
+  batch_ai_requests: true
