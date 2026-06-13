@@ -1,0 +1,47 @@
+# CleanWave configuration
+# Copy to ~/.cleanwave/config.yaml and edit to your taste.
+
+# How old a file must be (in days) to be moved to OLD_FILES/
+old_file_threshold_days: 365
+
+# Installers (.dmg, .exe, etc.) are flagged after this many days
+installer_grace_days: 14
+
+# Where flagged files land on your Desktop
+deletion_dest: "~/Desktop/deletion_approval"
+old_files_dest: "~/Desktop/OLD_FILES"
+
+# Set to true to ignore hidden files/dirs (dotfiles)
+skip_hidden: false
+
+# Skip files larger than this for AI content reading (0 = no limit)
+max_file_size_mb: 50
+
+# AI provider: "groq" or "openrouter"
+# Keys go in .env — this just sets the default provider
+ai_provider: "groq"
+
+# How many files to send to AI per API call
+ai_batch_size: 10
+
+# Parallel workers for file hashing
+hash_workers: 4
+
+# Glob patterns for files that should NEVER be touched
+whitelist_patterns:
+  - "*recovery*"
+  - "*password*"
+  - "*passphrase*"
+  - "*secret*"
+  - "*license*"
+  - "*serial*"
+  - "*.key"
+  - "*.pem"
+  - "*.kdbx"
+  - "*.p12"
+  - "*.pfx"
+  - "*.asc"
+
+# Absolute paths that are always skipped (entire subtree)
+# whitelist_paths:
+#   - "~/Documents/important"
