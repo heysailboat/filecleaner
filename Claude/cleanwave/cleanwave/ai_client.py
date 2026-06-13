@@ -9,7 +9,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 
 import requests
 
@@ -29,6 +29,13 @@ TEXT_EXTENSIONS = {
     ".json", ".xml", ".csv", ".yaml", ".yml", ".sh", ".bat",
     ".c", ".cpp", ".h", ".java", ".rb", ".go", ".rs",
 }
+
+# Groq free tier: ~30 req/min. 2.5s between batches keeps us safely under.
+_INTER_BATCH_DELAY = 2.5
+
+# Hard cap: if there are more vague files than this, skip AI entirely.
+# Sending 5k files to a free-tier API one batch at a time would take hours.
+AI_FILE_CAP = 200
 
 
 def _read_preview(path: Path) -> str:
@@ -80,20 +87,33 @@ def _call_api(prompt: str, api_key: str, provider: str) -> Optional[str]:
         "max_tokens": 800,
     }
 
-    for attempt in range(3):
+    max_attempts = 5
+    for attempt in range(max_attempts):
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=60)
+
+            if resp.status_code == 429:
+                # Respect Retry-After header if present, else back off hard
+                retry_after = resp.headers.get("retry-after")
+                wait = float(retry_after) if retry_after else min(60, 4 ** attempt)
+                time.sleep(wait)
+                continue
+
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
-        except Exception:
-            if attempt < 2:
+
+        except requests.exceptions.HTTPError:
+            if attempt < max_attempts - 1:
                 time.sleep(2 ** attempt)
+        except Exception:
+            if attempt < max_attempts - 1:
+                time.sleep(2 ** attempt)
+
     return None
 
 
 def _parse_response(raw: str, expected_indices: list[int]) -> dict[int, bool]:
     """Parse AI JSON response into {index: is_important} map."""
-    # Strip markdown fences if present
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
@@ -105,7 +125,7 @@ def _parse_response(raw: str, expected_indices: list[int]) -> dict[int, bool]:
             return {item["index"]: bool(item.get("important", False)) for item in data}
     except (json.JSONDecodeError, KeyError):
         pass
-    # Fallback: treat all as not important (conservative)
+    # Fallback: treat all as not important (safe — stays in deletion_approval for human)
     return {i: False for i in expected_indices}
 
 
@@ -114,52 +134,60 @@ def assess_vague_files(
     api_key: str,
     provider: str = "groq",
     batch_size: int = 10,
+    on_batch_done: Optional[Callable[[int], None]] = None,
 ) -> list[tuple[FileInfo, FileDecision]]:
     """
     Takes (FileInfo, FileDecision) pairs where needs_ai=True.
     Returns updated decisions: important files are upgraded to KEEP,
     unimportant ones stay in deletion_approval.
     AI failure is safe — files stay in deletion_approval for human review.
+
+    on_batch_done: optional callable(n_files) called after each batch completes,
+    so the caller can advance a progress bar in real time.
     """
     if not items or not api_key:
         return items
 
     updated = list(items)
 
-    for start in range(0, len(items), batch_size):
+    for batch_num, start in enumerate(range(0, len(items), batch_size)):
         chunk = items[start: start + batch_size]
         indexed = [(start + i, fi) for i, (fi, _) in enumerate(chunk)]
         indices = [idx for idx, _ in indexed]
 
+        # Rate-limit: pause between batches (not before the very first one)
+        if batch_num > 0:
+            time.sleep(_INTER_BATCH_DELAY)
+
         prompt = _build_batch_prompt(indexed)
         raw = _call_api(prompt, api_key, provider)
 
-        if raw is None:
-            # AI unavailable — leave as deletion_approval (safe fallback)
-            continue
+        if raw is not None:
+            importance_map = _parse_response(raw, indices)
 
-        importance_map = _parse_response(raw, indices)
+            for local_i, (fi, dec) in enumerate(chunk):
+                global_i = start + local_i
+                important = importance_map.get(global_i, False)
 
-        for local_i, (fi, dec) in enumerate(chunk):
-            global_i = start + local_i
-            important = importance_map.get(global_i, False)
+                if important:
+                    updated[global_i] = (fi, FileDecision(
+                        destination=Destination.KEEP,
+                        category="vague",
+                        reason="vague name but AI flagged as likely important — keeping for safety",
+                        confidence=0.70,
+                        needs_ai=False,
+                    ))
+                else:
+                    updated[global_i] = (fi, FileDecision(
+                        destination=Destination.DELETION_APPROVAL,
+                        category="vague",
+                        reason="generic filename, AI assessed as low importance",
+                        confidence=0.65,
+                        needs_ai=False,
+                    ))
 
-            if important:
-                updated[global_i] = (fi, FileDecision(
-                    destination=Destination.KEEP,
-                    category="vague",
-                    reason=f"vague name but AI flagged as likely important — keeping for safety",
-                    confidence=0.70,
-                    needs_ai=False,
-                ))
-            else:
-                # Keep in deletion_approval, update reason
-                updated[global_i] = (fi, FileDecision(
-                    destination=Destination.DELETION_APPROVAL,
-                    category="vague",
-                    reason=f"generic filename, AI assessed as low importance",
-                    confidence=0.65,
-                    needs_ai=False,
-                ))
+        # Always tick progress, even on API failure
+        if on_batch_done is not None:
+            on_batch_done(len(chunk))
 
     return updated

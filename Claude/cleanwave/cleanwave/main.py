@@ -168,16 +168,33 @@ def run(args: argparse.Namespace, cfg: dict) -> None:
         provider = "groq" if os.environ.get("GROQ_API_KEY") else "openrouter"
 
         if api_key:
-            ui.console.print(f"  [dim]Sending {len(vague_queue)} ambiguous files to {provider}…[/dim]")
-            with ui.make_progress("AI assessing...") as prog:
-                task = prog.add_task("AI assessing...", total=len(vague_queue))
-                ai_decisions = assess_vague_files(
-                    vague_queue,
-                    api_key=api_key,
-                    provider=provider,
-                    batch_size=cfg["ai_batch_size"],
+            from .ai_client import AI_FILE_CAP
+            if len(vague_queue) > AI_FILE_CAP:
+                ui.console.print(
+                    f"  [yellow]⚠ {len(vague_queue)} ambiguous files found — "
+                    f"over the free-tier cap ({AI_FILE_CAP}). "
+                    f"Skipping AI; all vague files go to deletion_approval for manual review.[/yellow]"
                 )
-                prog.update(task, completed=len(vague_queue))
+                ai_decisions = vague_queue
+            else:
+                n_batches = (len(vague_queue) + cfg["ai_batch_size"] - 1) // cfg["ai_batch_size"]
+                ui.console.print(
+                    f"  [dim]Sending {len(vague_queue)} files to {provider} "
+                    f"({n_batches} requests, throttled to stay under free-tier limits)…[/dim]"
+                )
+                with ui.make_progress("AI assessing...") as prog:
+                    task = prog.add_task("AI assessing...", total=len(vague_queue))
+
+                    def _on_batch(n: int) -> None:
+                        prog.advance(task, n)
+
+                    ai_decisions = assess_vague_files(
+                        vague_queue,
+                        api_key=api_key,
+                        provider=provider,
+                        batch_size=cfg["ai_batch_size"],
+                        on_batch_done=_on_batch,
+                    )
         else:
             ui.console.print("  [yellow]No API key found — vague files moved to deletion_approval for manual review[/yellow]")
             ai_decisions = vague_queue  # stay as-is (deletion_approval, human decides)
