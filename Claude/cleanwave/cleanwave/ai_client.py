@@ -33,11 +33,6 @@ TEXT_EXTENSIONS = {
 # Groq free tier: ~30 req/min. 2.5s between batches keeps us safely under.
 _INTER_BATCH_DELAY = 2.5
 
-# Hard cap: if there are more vague files than this, skip AI entirely.
-# Sending 5k files to a free-tier API one batch at a time would take hours.
-AI_FILE_CAP = 200
-
-
 def _read_preview(path: Path) -> str:
     if path.suffix.lower() not in TEXT_EXTENSIONS:
         return ""

@@ -6,7 +6,6 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import List
 
 from .models import FileInfo, SkippedDir, ScanResult
 
@@ -29,8 +28,8 @@ _MACOS_APP_DATA = {
     "Library/Mail",
 }
 
-# Note: Library/Caches and Library/Logs are intentionally excluded here —
-# they're fair game for cleanup and will be scanned normally.
+# note: Library/Caches and Library/Logs are intentionally NOT skipped —
+# they're fair game for cleanup.
 
 _WINDOWS_SYSTEM = {
     "Windows", "Program Files", "Program Files (x86)",
@@ -42,6 +41,19 @@ _WINDOWS_APP_DATA = {
     "AppData\\Roaming",
     "AppData\\Local\\Microsoft",
     "AppData\\Local\\Packages",
+}
+
+# ── Virtual env / tooling dirs — skipped everywhere, by name ────────────────
+
+_VENV_NAMES = {
+    ".venv", "venv", "env",
+    "node_modules", "__pycache__",
+    ".git", ".hg", ".svn",
+    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    ".eggs", "*.egg-info",
+    "dist", "build",                    # python build artifacts
+    ".next", ".nuxt", ".svelte-kit",    # js framework caches
+    ".parcel-cache", ".turbo",
 }
 
 
@@ -57,8 +69,14 @@ def _is_path_under(child: Path, parent_str: str) -> bool:
 def _classify_dir(path: Path) -> tuple[bool, str]:
     """
     Returns (should_skip, reason).
-    reason is one of: "os_system", "app_data", ""
+    reason: "os_system" | "app_data" | "virtualenv" | ""
     """
+    name = path.name
+
+    # venv / tooling — check by name first, cheapest test
+    if name in _VENV_NAMES or name.endswith(".egg-info"):
+        return True, "virtualenv"
+
     path_str = str(path.resolve())
 
     if sys.platform == "darwin":
@@ -90,7 +108,7 @@ def collect_files(
     max_file_size_mb: int = 0,       # 0 = no limit
 ) -> ScanResult:
     """
-    Walk scan_dirs recursively, skipping OS/app directories.
+    Walk scan_dirs recursively, skipping OS/app/venv directories.
     Returns collected FileInfo list + skipped dirs log.
     """
     result = ScanResult()
@@ -105,7 +123,6 @@ def collect_files(
         for dirpath, dirnames, filenames in os.walk(start, followlinks=False):
             current = Path(dirpath)
 
-            # Filter subdirectories in-place so os.walk won't recurse into them
             filtered = []
             for d in dirnames:
                 sub = current / d
