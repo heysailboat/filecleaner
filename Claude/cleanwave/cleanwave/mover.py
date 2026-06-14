@@ -1,5 +1,5 @@
 """
-mover.py — move files to deletion_approval/ or OLD_FILES/ with collision handling
+mover.py — move files into subcategorised destination folders
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from .ui import console
 
 
 def _resolve_collision(dest: Path) -> Path:
-    """If dest already exists, append _2, _3, ... until free."""
     if not dest.exists():
         return dest
     stem, suffix = dest.stem, dest.suffix
@@ -30,24 +29,25 @@ def _dest_path(
     old_files_root: Path,
 ) -> Path:
     """
-    Compute destination path, preserving the file's directory structure
-    relative to home so it's traceable after the move.
+    Build destination path.
+    Structure: <root>/<subcategory>/<relative-path-from-home>/<filename>
+
+    e.g. ~/Desktop/deletion_approval/installers/Downloads/old_app.dmg
+         ~/Desktop/OLD_FILES/images/Pictures/2021/photo.jpg
     """
     home = Path.home()
     try:
         rel = fi.path.relative_to(home)
     except ValueError:
-        # File outside home (e.g. external drive, root-level paths)
         rel = Path("outside_home") / fi.path.name
 
-    if dec.destination == Destination.DELETION_APPROVAL:
-        base = deletion_root
-    else:
-        base = old_files_root
+    base = deletion_root if dec.destination == Destination.DELETION_APPROVAL else old_files_root
 
-    # For duplicates, use the renamed filename but preserve parent dirs
+    # subcategory subfolder — falls back to "other" if empty
+    subdir = dec.subcategory or "other"
+
     filename = dec.new_name if dec.new_name else fi.path.name
-    return base / rel.parent / filename
+    return base / subdir / rel.parent / filename
 
 
 def execute_moves(
@@ -56,14 +56,8 @@ def execute_moves(
     old_files_root: Path,
     dry_run: bool = False,
 ) -> list[MoveRecord]:
-    """
-    Move files based on their decisions.
-    Skips KEEP decisions silently.
-    Returns list of MoveRecord for reporting.
-    """
     records: list[MoveRecord] = []
 
-    # Create destination roots
     if not dry_run:
         deletion_root.mkdir(parents=True, exist_ok=True)
         old_files_root.mkdir(parents=True, exist_ok=True)
@@ -80,7 +74,7 @@ def execute_moves(
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(fi.path), str(dest))
             except (OSError, PermissionError, shutil.Error) as e:
-                console.print(f"[red]  ✗ Could not move {fi.path.name}: {e}[/red]")
+                console.print(f"[red]  ✗ could not move {fi.path.name}: {e}[/red]")
                 continue
 
         records.append(MoveRecord(

@@ -31,31 +31,26 @@ def find_duplicates(
 ) -> list[tuple[FileInfo, FileDecision]]:
     """
     Hash all files in parallel, group by hash.
-    For each group with >1 file: keep the NEWEST (highest mtime),
-    mark the rest as duplicates destined for deletion_approval/.
-    Returns a list of (FileInfo, FileDecision) for the duplicate copies only.
+    Keep the NEWEST (highest mtime), flag the rest as duplicates.
+    Returns (FileInfo, FileDecision) for duplicate copies only.
     """
-    # Quick pre-filter: group by size — same hash requires same size
     by_size: dict[int, list[FileInfo]] = defaultdict(list)
     for fi in files:
         by_size[fi.size].append(fi)
 
-    # Only hash files that share a size with at least one other file
     candidates = [fi for group in by_size.values() if len(group) > 1 for fi in group]
 
     if not candidates:
         return []
 
-    # Parallel hash
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {ex.submit(_hash_file, fi.path): fi for fi in candidates}
         for fi in candidates:
-            fi.hash_val = None  # reset
+            fi.hash_val = None
         for future in as_completed(futures):
             fi = futures[future]
             fi.hash_val = future.result()
 
-    # Group by hash
     by_hash: dict[str, list[FileInfo]] = defaultdict(list)
     for fi in candidates:
         if fi.hash_val:
@@ -67,7 +62,6 @@ def find_duplicates(
         if len(group) < 2:
             continue
 
-        # Keep the most recently modified file
         group_sorted = sorted(group, key=lambda x: x.mtime, reverse=True)
         keeper = group_sorted[0]
 
@@ -76,7 +70,8 @@ def find_duplicates(
             results.append((dup, FileDecision(
                 destination=Destination.DELETION_APPROVAL,
                 category="duplicate",
-                reason=f"identical content to {keeper.path} (keeping newest)",
+                subcategory="duplicates",
+                reason=f"identical content to {keeper.path.name} (keeping newest)",
                 confidence=1.0,
                 new_name=new_name,
             )))

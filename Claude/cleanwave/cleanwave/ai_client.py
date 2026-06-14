@@ -1,12 +1,11 @@
 """
-ai_client.py — Groq / OpenRouter advisory pass for vague/ambiguous files.
-AI is NEVER the final word. It returns an importance score that informs
-whether a vague file stays in deletion_approval or gets upgraded to KEEP.
+ai_client.py — AI review pass over all flagged files.
+Reviews rule-based decisions and overrides mistakes (e.g. screen savers
+flagged as old files). AI is advisory — never the final word.
 """
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Optional, Callable
@@ -23,15 +22,16 @@ GROQ_MODEL = "llama-3.1-8b-instant"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL = "meta-llama/llama-3-8b-instruct:free"
 
-MAX_PREVIEW_CHARS = 400
+MAX_PREVIEW_CHARS = 300
 TEXT_EXTENSIONS = {
     ".txt", ".md", ".py", ".js", ".ts", ".html", ".css",
     ".json", ".xml", ".csv", ".yaml", ".yml", ".sh", ".bat",
     ".c", ".cpp", ".h", ".java", ".rb", ".go", ".rs",
 }
 
-# Groq free tier: ~30 req/min. 2.5s between batches keeps us safely under.
+# Groq free tier: ~30 req/min. 2.5s between batches keeps us under.
 _INTER_BATCH_DELAY = 2.5
+
 
 def _read_preview(path: Path) -> str:
     if path.suffix.lower() not in TEXT_EXTENSIONS:
@@ -43,33 +43,39 @@ def _read_preview(path: Path) -> str:
         return ""
 
 
-def _build_batch_prompt(batch: list[tuple[int, FileInfo]]) -> str:
+def _build_review_prompt(batch: list[tuple[int, FileInfo, FileDecision]]) -> str:
     lines = [
-        "You are helping assess files on a user's computer for potential cleanup.",
-        "For each file below, estimate how important it likely is to keep.",
-        "Respond ONLY with a JSON array in the same order as the files.",
-        'Each item: {"index": N, "important": true/false, "reason": "brief reason"}',
+        "You are reviewing automated file cleanup decisions on a user's computer.",
+        "A rule-based classifier flagged these files for deletion or archiving.",
+        "Your job is to catch mistakes — especially files wrongly flagged.",
+        "Only set override=true if you're confident the rule got it wrong.",
+        "Common mistakes to watch for: app resources, screen savers, system fonts,",
+        "game files, or anything that looks like it belongs to an installed application.",
+        "",
+        "Respond ONLY with a valid JSON array, one object per file, in order:",
+        '[{"index": N, "override": false, "correct_destination": "keep"|"deletion_approval"|"old_files", "reason": "brief"}]',
         "",
         "Files:",
     ]
-    for idx, fi in batch:
-        age = (time.time() - fi.mtime) / 86400
+    for idx, fi, dec in batch:
+        last_activity = max(fi.mtime, fi.atime)
+        age_days = (time.time() - last_activity) / 86400
         preview = _read_preview(fi.path)
         lines.append(f"\n--- [{idx}] ---")
         lines.append(f"Name: {fi.path.name}")
+        lines.append(f"Path: {fi.path.parent}")
         lines.append(f"Extension: {fi.ext or 'none'}")
         lines.append(f"Size: {fi.size / 1024:.1f} KB")
-        lines.append(f"Age: {age:.0f} days")
+        lines.append(f"Last activity: {age_days:.0f} days ago")
+        lines.append(f"Rule decision: {dec.destination.value} ({dec.reason})")
         if preview:
-            lines.append(f"Preview: {preview[:MAX_PREVIEW_CHARS]}")
+            lines.append(f"Preview: {preview}")
     return "\n".join(lines)
 
 
 def _call_api(prompt: str, api_key: str, provider: str) -> Optional[str]:
-    if provider == "groq":
-        url, model = GROQ_URL, GROQ_MODEL
-    else:
-        url, model = OPENROUTER_URL, OPENROUTER_MODEL
+    url   = GROQ_URL        if provider == "groq" else OPENROUTER_URL
+    model = GROQ_MODEL      if provider == "groq" else OPENROUTER_MODEL
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -82,13 +88,11 @@ def _call_api(prompt: str, api_key: str, provider: str) -> Optional[str]:
         "max_tokens": 800,
     }
 
-    max_attempts = 5
-    for attempt in range(max_attempts):
+    for attempt in range(5):
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=60)
 
             if resp.status_code == 429:
-                # Respect Retry-After header if present, else back off hard
                 retry_after = resp.headers.get("retry-after")
                 wait = float(retry_after) if retry_after else min(60, 4 ** attempt)
                 time.sleep(wait)
@@ -98,33 +102,26 @@ def _call_api(prompt: str, api_key: str, provider: str) -> Optional[str]:
             return resp.json()["choices"][0]["message"]["content"]
 
         except requests.exceptions.HTTPError:
-            if attempt < max_attempts - 1:
+            if attempt < 4:
                 time.sleep(2 ** attempt)
         except Exception:
-            if attempt < max_attempts - 1:
+            if attempt < 4:
                 time.sleep(2 ** attempt)
 
     return None
 
 
-def _parse_response(raw: str, expected_indices: list[int]) -> dict[int, bool]:
-    """Parse AI JSON response into {index: is_important} map."""
+def _parse_response(raw: str) -> list[dict]:
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
-    try:
-        data = json.loads(raw.strip())
-        if isinstance(data, list):
-            return {item["index"]: bool(item.get("important", False)) for item in data}
-    except (json.JSONDecodeError, KeyError):
-        pass
-    # Fallback: treat all as not important (safe — stays in deletion_approval for human)
-    return {i: False for i in expected_indices}
+    data = json.loads(raw.strip())
+    return data if isinstance(data, list) else []
 
 
-def assess_vague_files(
+def ai_review_decisions(
     items: list[tuple[FileInfo, FileDecision]],
     api_key: str,
     provider: str = "groq",
@@ -132,56 +129,58 @@ def assess_vague_files(
     on_batch_done: Optional[Callable[[int], None]] = None,
 ) -> list[tuple[FileInfo, FileDecision]]:
     """
-    Takes (FileInfo, FileDecision) pairs where needs_ai=True.
-    Returns updated decisions: important files are upgraded to KEEP,
-    unimportant ones stay in deletion_approval.
-    AI failure is safe — files stay in deletion_approval for human review.
+    Reviews ALL flagged file decisions and overrides where the rule was wrong.
+    AI receives the original rule decision + file metadata so it can sanity-check.
+    On parse failure or API error, original rule decisions are preserved (safe).
 
-    on_batch_done: optional callable(n_files) called after each batch completes,
-    so the caller can advance a progress bar in real time.
+    on_batch_done: optional callable(n_files) for progress bar updates.
     """
     if not items or not api_key:
         return items
 
     updated = list(items)
 
+    _DEST_MAP = {
+        "keep":               Destination.KEEP,
+        "deletion_approval":  Destination.DELETION_APPROVAL,
+        "old_files":          Destination.OLD_FILES,
+    }
+
     for batch_num, start in enumerate(range(0, len(items), batch_size)):
         chunk = items[start: start + batch_size]
-        indexed = [(start + i, fi) for i, (fi, _) in enumerate(chunk)]
-        indices = [idx for idx, _ in indexed]
+        indexed = [(start + i, fi, dec) for i, (fi, dec) in enumerate(chunk)]
 
-        # Rate-limit: pause between batches (not before the very first one)
         if batch_num > 0:
             time.sleep(_INTER_BATCH_DELAY)
 
-        prompt = _build_batch_prompt(indexed)
+        prompt = _build_review_prompt(indexed)
         raw = _call_api(prompt, api_key, provider)
 
         if raw is not None:
-            importance_map = _parse_response(raw, indices)
-
-            for local_i, (fi, dec) in enumerate(chunk):
-                global_i = start + local_i
-                important = importance_map.get(global_i, False)
-
-                if important:
+            try:
+                results = _parse_response(raw)
+                for item in results:
+                    if not item.get("override", False):
+                        continue
+                    global_i = item.get("index")
+                    if global_i is None or global_i >= len(updated):
+                        continue
+                    fi, dec = updated[global_i]
+                    new_dest = _DEST_MAP.get(
+                        item.get("correct_destination", "keep"),
+                        Destination.KEEP,
+                    )
                     updated[global_i] = (fi, FileDecision(
-                        destination=Destination.KEEP,
-                        category="vague",
-                        reason="vague name but AI flagged as likely important — keeping for safety",
+                        destination=new_dest,
+                        category=dec.category,
+                        subcategory=dec.subcategory,
+                        reason=f"AI override: {item.get('reason', '')}",
                         confidence=0.70,
-                        needs_ai=False,
+                        new_name=dec.new_name,
                     ))
-                else:
-                    updated[global_i] = (fi, FileDecision(
-                        destination=Destination.DELETION_APPROVAL,
-                        category="vague",
-                        reason="generic filename, AI assessed as low importance",
-                        confidence=0.65,
-                        needs_ai=False,
-                    ))
+            except Exception:
+                pass  # parse failure → keep original rule decisions
 
-        # Always tick progress, even on API failure
         if on_batch_done is not None:
             on_batch_done(len(chunk))
 

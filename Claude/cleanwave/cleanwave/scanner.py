@@ -1,15 +1,16 @@
 """
-scanner.py — walk directories, detect and skip OS/app dirs, collect FileInfo
+scanner.py — walk directories, detect and skip OS/app/venv dirs, collect FileInfo
 """
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 from .models import FileInfo, SkippedDir, ScanResult
 
-# ── OS / system directories that should never be recursed ───────────────────
+# ── OS / system directories ──────────────────────────────────────────────────
 
 _MACOS_SYSTEM = {
     "/System", "/Library", "/Applications",
@@ -27,9 +28,6 @@ _MACOS_APP_DATA = {
     "Library/Safari",
     "Library/Mail",
 }
-
-# note: Library/Caches and Library/Logs are intentionally NOT skipped —
-# they're fair game for cleanup.
 
 _WINDOWS_SYSTEM = {
     "Windows", "Program Files", "Program Files (x86)",
@@ -50,9 +48,8 @@ _VENV_NAMES = {
     "node_modules", "__pycache__",
     ".git", ".hg", ".svn",
     ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-    ".eggs", "*.egg-info",
-    "dist", "build",                    # python build artifacts
-    ".next", ".nuxt", ".svelte-kit",    # js framework caches
+    ".eggs",
+    ".next", ".nuxt", ".svelte-kit",
     ".parcel-cache", ".turbo",
 }
 
@@ -66,14 +63,34 @@ def _is_path_under(child: Path, parent_str: str) -> bool:
         return False
 
 
+def _get_atime(path: Path, stat_result) -> float:
+    """
+    Best-effort last-accessed time.
+    On macOS, st_atime is often stale/disabled — use Spotlight instead.
+    Falls back to st_atime on failure or on Windows.
+    """
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["mdls", "-name", "kMDItemLastUsedDate", "-raw", str(path)],
+                capture_output=True, text=True, timeout=2,
+            )
+            raw = result.stdout.strip()
+            if raw and raw != "(null)":
+                # format: "2024-03-15 14:22:10 +0000"
+                from datetime import datetime, timezone
+                dt = datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S")
+                return dt.replace(tzinfo=timezone.utc).timestamp()
+        except Exception:
+            pass
+    return stat_result.st_atime
+
+
 def _classify_dir(path: Path) -> tuple[bool, str]:
-    """
-    Returns (should_skip, reason).
-    reason: "os_system" | "app_data" | "virtualenv" | ""
-    """
+    """Returns (should_skip, reason)."""
     name = path.name
 
-    # venv / tooling — check by name first, cheapest test
+    # venv / tooling — cheapest check first
     if name in _VENV_NAMES or name.endswith(".egg-info"):
         return True, "virtualenv"
 
@@ -105,7 +122,7 @@ def _classify_dir(path: Path) -> tuple[bool, str]:
 def collect_files(
     scan_dirs: list[str],
     skip_hidden: bool = False,
-    max_file_size_mb: int = 0,       # 0 = no limit
+    max_file_size_mb: int = 0,
 ) -> ScanResult:
     """
     Walk scan_dirs recursively, skipping OS/app/venv directories.
@@ -161,6 +178,7 @@ def collect_files(
                     path=fpath,
                     size=stat.st_size,
                     mtime=stat.st_mtime,
+                    atime=_get_atime(fpath, stat),
                     ext=fpath.suffix.lower(),
                 ))
 

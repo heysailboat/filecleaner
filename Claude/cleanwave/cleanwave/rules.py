@@ -14,26 +14,48 @@ from .models import FileInfo, FileDecision, Destination
 JUNK_EXTENSIONS = {
     ".tmp", ".temp", ".cache", ".cached", ".bak", ".old",
     ".swp", ".swo", ".part", ".crdownload", ".download",
-    ".dmp",  # crash dumps
+    ".dmp",
 }
 
 LOG_EXTENSIONS = {".log", ".log1", ".log2"}
 
 INSTALLER_EXTENSIONS = {
-    ".dmg", ".pkg",          # macOS
-    ".exe", ".msi", ".cab",  # Windows
+    ".dmg", ".pkg",
+    ".exe", ".msi", ".cab",
     ".deb", ".rpm", ".appimage",
 }
 
-# Names that are definitely system-generated junk
 JUNK_NAMES = {
     ".ds_store", "thumbs.db", "desktop.ini", ".localized",
     ".spotlight-v100", ".trashes", ".fseventsd",
     "hiberfil.sys", "pagefile.sys", "swapfile.sys",
 }
 
+# ── Subcategory map for old_files/ subfolders ────────────────────────────────
+
+_EXT_SUBCATEGORY: dict[str, set[str]] = {
+    "images":    {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".heic",
+                  ".webp", ".raw", ".cr2", ".nef", ".arw", ".svg"},
+    "documents": {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+                  ".txt", ".md", ".pages", ".numbers", ".keynote", ".rtf", ".odt"},
+    "archives":  {".zip", ".tar", ".gz", ".rar", ".7z", ".bz2", ".xz",
+                  ".dmg", ".pkg", ".iso"},
+    "media":     {".mp4", ".mov", ".avi", ".mkv", ".mp3", ".flac", ".wav",
+                  ".aac", ".m4a", ".m4v", ".wmv", ".ogg", ".opus"},
+    "code":      {".py", ".js", ".ts", ".html", ".css", ".java", ".c", ".cpp",
+                  ".h", ".rb", ".go", ".rs", ".php", ".swift", ".kt", ".cs",
+                  ".sh", ".bash", ".zsh", ".fish"},
+}
+
+
+def _ext_subcategory(ext: str) -> str:
+    for subcat, exts in _EXT_SUBCATEGORY.items():
+        if ext in exts:
+            return subcat
+    return "other"
+
+
 # ── Vague / generic name patterns ────────────────────────────────────────────
-# Files matching these will be queued for AI assessment.
 
 _VAGUE_PATTERNS = [
     r"^untitled(\s*\d+)?$",
@@ -45,9 +67,9 @@ _VAGUE_PATTERNS = [
     r"^new\s+(folder|document|text file)",
     r"^document\s*\d*$",
     r"^copy of ",
-    r"^\d{4,}$",            # long purely-numeric name
-    r"^[a-f0-9]{8,}$",     # hex hash-like name (temp exports etc.)
-    r"^dsc\d+$",            # old camera naming
+    r"^\d{4,}$",
+    r"^[a-f0-9]{8,}$",
+    r"^dsc\d+$",
     r"^img_\d+$",
     r"^photo_\d+$",
     r"^clip\d+$",
@@ -68,25 +90,11 @@ def _is_vague_name(path: Path) -> bool:
 # ── Whitelist check ──────────────────────────────────────────────────────────
 
 _IMPORTANT_PATTERNS = [
-    r"recovery",
-    r"password",
-    r"passphrase",
-    r"secret",
-    r"private",
-    r"credential",
-    r"license",
-    r"serial",
-    r"key",
-    r"token",
-    r"ssh",
-    r"gpg",
-    r"certificate",
-    r"backup",
-    r"2fa",
+    r"recovery", r"password", r"passphrase", r"secret", r"private",
+    r"credential", r"license", r"serial", r"key", r"token",
+    r"ssh", r"gpg", r"certificate", r"backup", r"2fa",
 ]
-_IMPORTANT_EXTENSIONS = {
-    ".key", ".pem", ".p12", ".pfx", ".kdbx", ".asc",
-}
+_IMPORTANT_EXTENSIONS = {".key", ".pem", ".p12", ".pfx", ".kdbx", ".asc"}
 _IMPORTANT_RE = [re.compile(p, re.IGNORECASE) for p in _IMPORTANT_PATTERNS]
 
 
@@ -114,13 +122,16 @@ def classify(
 ) -> FileDecision:
     """
     Apply fast rules to a single file.
-    Returns a FileDecision; decision.needs_ai=True means queue for AI pass.
-    AI is never the final word — it only informs the 'vague' category.
+    Uses max(mtime, atime) for age so recently opened old files aren't flagged.
+    AI will later review ALL flagged decisions and can override.
     """
     name_lower = fi.path.name.lower()
-    age_days = (time.time() - fi.mtime) / 86400
 
-    # 1. Whitelist — always keep, no questions
+    # use the most recent of modified or last-opened
+    last_activity = max(fi.mtime, fi.atime)
+    age_days = (time.time() - last_activity) / 86400
+
+    # 1. whitelist — always keep
     if is_whitelisted(fi.path, extra_whitelist):
         return FileDecision(
             destination=Destination.KEEP,
@@ -128,71 +139,76 @@ def classify(
             reason="matches important-file pattern",
         )
 
-    # 2. Empty file
+    # 2. empty file
     if fi.size == 0:
         return FileDecision(
             destination=Destination.DELETION_APPROVAL,
             category="junk",
+            subcategory="temp",
             reason="empty file (0 bytes)",
-            confidence=1.0,
         )
 
-    # 3. Known system junk names
+    # 3. known system junk names
     if name_lower in JUNK_NAMES:
         return FileDecision(
             destination=Destination.DELETION_APPROVAL,
             category="junk",
+            subcategory="system",
             reason=f"system-generated junk ({fi.path.name})",
-            confidence=1.0,
         )
 
-    # 4. Junk extensions
+    # 4. junk extensions
     if fi.ext in JUNK_EXTENSIONS:
         return FileDecision(
             destination=Destination.DELETION_APPROVAL,
             category="junk",
+            subcategory="temp",
             reason=f"temporary/junk file type ({fi.ext})",
             confidence=0.95,
         )
 
-    # 5. Old logs
+    # 5. old logs
     if fi.ext in LOG_EXTENSIONS and age_days > 7:
         return FileDecision(
             destination=Destination.DELETION_APPROVAL,
             category="junk",
-            reason=f"log file {age_days:.0f} days old",
+            subcategory="logs",
+            reason=f"log file, no activity in {age_days:.0f} days",
             confidence=0.90,
         )
 
-    # 6. Installer files (used ones, past grace period)
+    # 6. installer files past grace period
     if fi.ext in INSTALLER_EXTENSIONS and age_days > installer_grace_days:
         return FileDecision(
             destination=Destination.DELETION_APPROVAL,
             category="junk",
-            reason=f"installer not used for {age_days:.0f} days",
+            subcategory="installers",
+            reason=f"installer, no activity in {age_days:.0f} days",
             confidence=0.85,
         )
 
-    # 7. Old files (not already junk)
+    # 7. old files (not already caught above)
     if age_days > old_threshold_days:
         return FileDecision(
             destination=Destination.OLD_FILES,
             category="old_file",
-            reason=f"not modified in {age_days:.0f} days (threshold: {old_threshold_days})",
+            subcategory=_ext_subcategory(fi.ext),
+            reason=f"no activity in {age_days:.0f} days (threshold: {old_threshold_days})",
             confidence=0.80,
         )
 
-    # 8. Vague / generic name — queue for AI
+    # 8. vague / generic name
     if _is_vague_name(fi.path):
         return FileDecision(
-            destination=Destination.DELETION_APPROVAL,  # tentative; AI may upgrade to KEEP
+            destination=Destination.DELETION_APPROVAL,
             category="vague",
-            reason="generic/untitled filename — needs AI assessment",
+            subcategory=_ext_subcategory(fi.ext),
+            reason="generic/untitled filename",
             confidence=0.50,
-            needs_ai=True,
+            needs_ai=False,  # AI now reviews everything, not a special queue
         )
 
-    # 9. No rule matched — keep
+    # 9. keep
     return FileDecision(
         destination=Destination.KEEP,
         category="keep",

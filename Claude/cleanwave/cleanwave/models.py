@@ -16,7 +16,8 @@ class Destination(Enum):
 class FileInfo:
     path: Path
     size: int           # bytes
-    mtime: float        # epoch
+    mtime: float        # last modified (epoch)
+    atime: float        # last accessed/opened (epoch)
     ext: str            # lowercase, e.g. ".jpg"
     hash_val: Optional[str] = None
 
@@ -26,6 +27,7 @@ class FileDecision:
     destination: Destination
     category: str       # "junk", "duplicate", "old_file", "vague", "os_dir", "keep"
     reason: str
+    subcategory: str = ""   # e.g. "logs", "installers", "images", "duplicates"
     confidence: float = 1.0
     needs_ai: bool = False
     new_name: Optional[str] = None   # used for DUPLICATE_ renaming
@@ -34,7 +36,7 @@ class FileDecision:
 @dataclass
 class SkippedDir:
     path: Path
-    reason: str         # "os_system", "app_data", "permission_denied"
+    reason: str         # "os_system", "app_data", "virtualenv", "permission_denied"
 
 
 @dataclass
