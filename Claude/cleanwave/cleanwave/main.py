@@ -198,19 +198,31 @@ def run(args: argparse.Namespace, cfg: dict) -> None:
     # Only show things that will actually move
     actionable = [(fi, dec) for fi, dec in all_decisions if dec.destination != Destination.KEEP]
 
-    # ── Preview ───────────────────────────────────────────────────────────
-    ui.print_section("Preview")
-    if actionable:
-        table = ui.build_preview_table(actionable)
-        ui.console.print(table)
-    else:
-        ui.console.print("  [green]Nothing flagged — your files look clean![/green]")
+    # ── Preview / Confirm ─────────────────────────────────────────────────
+    if not actionable:
+        ui.console.print("  [green]Nothing flagged — you're already clean![/green]")
         return
 
-    # ── Confirm ───────────────────────────────────────────────────────────
-    if not ui.confirm_proceed(len(actionable)):
-        ui.console.print("[dim]Aborted — nothing moved.[/dim]")
+    if args.dry_run:
+        from .preview_html import generate_and_open
+        ui.print_section("Dry run — opening preview in browser")
+        out = generate_and_open(actionable, scan_dirs)
+        ui.console.print(f"  [dim]saved → {out}[/dim]")
+        ui.console.print("  [dim]nothing was moved. run without --dry-run when ready.[/dim]")
         return
+
+    # real run — localhost interactive confirm
+    from .confirm_server import run_confirm
+    ui.print_section("Review in browser")
+    ui.console.print(f"  [dim]opening http://127.0.0.1:7234 — uncheck anything you want to skip, then confirm[/dim]")
+    confirmed = run_confirm(actionable)
+
+    if confirmed is None:
+        ui.console.print("[dim]cancelled — nothing moved.[/dim]")
+        return
+
+    ui.console.print(f"  [green]✓[/green] confirmed {len(confirmed)} of {len(actionable)} files")
+    actionable = confirmed
 
     # ── Execute moves ─────────────────────────────────────────────────────
     ui.print_section("Moving files")
