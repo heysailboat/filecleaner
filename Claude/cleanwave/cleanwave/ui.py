@@ -35,7 +35,7 @@ BANNER = r"""
 def print_banner() -> None:
     console.print(Panel(
         Text(BANNER, style="bold cyan", justify="center"),
-        subtitle="[dim]AI-assisted file cleanup[/dim]",
+        subtitle="[dim]AI-assisted file cleanup, made by AI[/dim]",
         border_style="cyan",
         padding=(0, 2),
     ))
