@@ -116,33 +116,23 @@ Output: [Claude/](Claude/)
 > 
 > Back-and-forth: **4/10**
 
-Originally, I set the Effort setting to Medium and ended up using the entirety of Claude's 5-hour limit with thinking and some follow-up questions from the model. 
-After the limit reset, I answered its questions. It then proceeded to ask me another round of questions, which I answered and also added Deepseek's output.
+Effort setting was always on Medium. Limits were a constraint, but that's a part of being broke.
 
-Claude read Deepseek's code, pointed out errors (see below), and began building. It chose to name the project "cleanwave", possibly due to Deepseek's choice of name.
-> nice, solid bones in that deepseek code — but it has a few real bugs (undefined `CHECKPOINT_INTERVAL`, `MAX_AI_FILE_SIZE_BYTES`, `DEFAULT_WHITELIST_PATTERNS`, a misaligned `else` in the AI fallback, and a `large_files` reference that crashes if `--find-large-files` isn't passed). also uses `is_relative_to()` which is Python 3.9+ and Catalina ships with 3.8. gonna use it as inspiration, not a base — rewriting clean.  
+Upon giving the prompt, Claude asked me some questions and began forming a plan. I also gave it Deepseek's implementation (which was made first) and it pointed out some errors. It chose to name the project "cleanwave", lining up with Deepseek's choice of name. 
 
 It then gave me a file tree, a basic usage guide, a comparison versus the Deepseek version, and then a `.zip` of the full project.
 
-Upon running the code, it stalled while assessing with AI due to Error 400s from Groq. Upon a Groq console check, it was revealed that the model Claude originally selected to be used in the code was deprecated. I gave Claude a list of active models and told it to pick a new one.
-It then chose `llama-3.1-8b-instant` (compared to `llama3-8b-8192` from before), told me which line to change, and then... uploaded the `.zip` again?
+Upon running the code, it had some minor bugs due to outdated information about Groq APIs, but it caught on quickly after I gave it the list of currently active models. It also had a large amount of issues with ratelimits. 
 
-Running the new code also stalled at the same point, with Error 429s being returned from Groq as the free plan I am using has rate limits much lower than the amount of requests we were calling. Additionally, the in-terminal progress bar was stuck on 0 despite a few 200s showing in the console.
-I passed this on to Claude, who fixed the issue by adding callbacks to update the progress bar, a delay between batches, retries, and a file cap which, when exceeded, would just skip assessing with AI and require manual approval. It then also returned a new `.zip`.
+However, after a lot of back and forth, it managed to make a program that worked well enough. However it still didn't have all the features I requested. There is still a lot of polishing to be done to it, but it certainly does find useless temp files well. 
 
-I then told it to stop giving me `.zip`s and only return changed files. It agreed and followed the instruction from there.
-
-I asked it to remove the file cap, exclude venv-related files as they were clogging up the output, and also asked it if we could print the `--dry-run` output cleaner. Its response gave me correctly line-numbered replacement blocks (with proper indentation) and some other instructions. I requested a full file for one of the responses as it was not fully clear what to replace. It also gave me some options for prettier output, which I discussed further with it.
-
-> [!NOTE]
-> Claude is the only model I have tried so far that is aware of file line numbers. No other model has given me correct "replace {xyz} lines with {abc}."
-
-After my response for the options it gave, it listed a plan and began working.
-
-> [!NOTE]
-> Currently, my Claude limits are exhausted. This section of the README will be updated when further interaction is done.
-   
-2. **Deepseek Chat**
+**Findings:**
+- Claude is the only model I have tried so far that is aware of file line numbers. No other model has given me correct "replace {xyz} lines with {abc}."
+- Claude is very good at planning and structuring, and it takes user input into great consideration.
+- Claude seems to be the only AI that gives the user room to work and understand, rather than forcing something on them. This might be due to my custom instructions, but I've tested this on no instructions and it still remained the same.
+- While Claude's implementation was very good, it still has a few issues that need to be fixed. However, much less than Deepseek's implementation, even on the first versions of both.
+  
+1. **Deepseek Chat**
 Output: [Deepseek/](Deepseek/)
 > Overall: **6/10**
 >
@@ -153,4 +143,3 @@ Output: [Deepseek/](Deepseek/)
 > Back-and-forth: **3/10** (did not go too far)
 
 I'll update this section soon. I didn't manage to get a proper, working output with Deepseek as it couldn't output a file without errors.
-
