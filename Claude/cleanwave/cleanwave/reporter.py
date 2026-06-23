@@ -1,24 +1,13 @@
 """
-reporter.py — generate a markdown log of everything CleanWave did
+reporter.py — markdown report + JSON sidecar for undo support
 """
 from __future__ import annotations
 
 import datetime
+import json
 from pathlib import Path
 
 from .models import MoveRecord, SkippedDir
-
-
-def _size_str(path: Path) -> str:
-    try:
-        b = path.stat().st_size if path.exists() else 0
-    except OSError:
-        b = 0
-    for unit in ("B", "KB", "MB", "GB"):
-        if b < 1024:
-            return f"{b:.1f} {unit}"
-        b /= 1024
-    return f"{b:.1f} TB"
 
 
 def generate_report(
@@ -37,22 +26,21 @@ def generate_report(
 
     lines = [
         f"# CleanWave Report{mode_note}",
-        f"",
+        "",
         f"**Date:** {now}  ",
         f"**Duration:** {duration:.1f}s  ",
         f"**Scanned:** {', '.join(scan_dirs)}  ",
-        f"",
-        f"## Summary",
-        f"",
-        f"| Category | Count |",
-        f"|---|---|",
+        "",
+        "## Summary",
+        "",
+        "| Category | Count |",
+        "|---|---|",
         f"| Moved to `deletion_approval/` | {len(deletion)} |",
         f"| Moved to `OLD_FILES/` | {len(old)} |",
         f"| Directories skipped (OS/app) | {len(skipped_dirs)} |",
-        f"",
+        "",
     ]
 
-    # ── deletion_approval section ─────────────────────────────────────────
     if deletion:
         lines += [
             "## 🗑️ deletion_approval",
@@ -62,12 +50,10 @@ def generate_report(
         ]
         for m in deletion:
             lines.append(
-                f"| `{m.original}` | `{m.destination.name}` "
-                f"| {m.category} | {m.reason} |"
+                f"| `{m.original}` | `{m.destination}` | {m.category} | {m.reason} |"
             )
         lines.append("")
 
-    # ── OLD_FILES section ─────────────────────────────────────────────────
     if old:
         lines += [
             "## 📦 OLD_FILES",
@@ -77,17 +63,15 @@ def generate_report(
         ]
         for m in old:
             lines.append(
-                f"| `{m.original}` | `{m.destination.name}` | {m.reason} |"
+                f"| `{m.original}` | `{m.destination}` | {m.reason} |"
             )
         lines.append("")
 
-    # ── Skipped directories ───────────────────────────────────────────────
     if skipped_dirs:
         lines += [
             "## ⚠️ Skipped Directories",
             "",
-            "These were identified as OS or app-related and not recursed into.  ",
-            "Review manually if needed.",
+            "These were identified as OS or app-related and not recursed into.",
             "",
             "| Path | Reason |",
             "|---|---|",
@@ -103,3 +87,13 @@ def generate_report(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(lines), encoding="utf-8")
+
+    # ── JSON sidecar for --undo ───────────────────────────────────────────
+    # Only written for real runs (not dry-run) since no files actually moved.
+    if not dry_run and moved:
+        sidecar = [
+            {"original": str(m.original), "moved_to": str(m.destination)}
+            for m in moved
+        ]
+        sidecar_path = output_path.with_suffix(".json")
+        sidecar_path.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
