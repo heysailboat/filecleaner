@@ -342,8 +342,28 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    _MAX_BODY = 1 * 1024 * 1024  # 1 MiB — more than enough for any realistic selection
+
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            # malformed Content-Length header — treat as cancel
+            self.server.cancelled = True
+            self.send_response(400)
+            self.end_headers()
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            self.server.done_event.set()
+            return
+
+        if length > self._MAX_BODY:
+            self.server.cancelled = True
+            self.send_response(413)
+            self.end_headers()
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            self.server.done_event.set()
+            return
+
         raw = self.rfile.read(length)
 
         if self.path == "/confirm":
