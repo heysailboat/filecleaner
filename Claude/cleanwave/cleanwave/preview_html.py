@@ -7,8 +7,10 @@ import datetime
 import json
 import webbrowser
 from pathlib import Path
+import html as _html
 
 from .models import FileInfo, FileDecision, Destination
+from .html_utils import _script_json
 
 
 def _size_str(size: int) -> str:
@@ -286,15 +288,15 @@ def generate_and_open(
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     stamp    = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    html = _HTML.format(
-        date=date_str,
-        scan_dirs=", ".join(scan_dirs),
-        data_json=json.dumps(data, ensure_ascii=False),
+    page_html = _HTML.format(
+      date=_html.escape(date_str),
+      scan_dirs=_html.escape(", ".join(scan_dirs)),
+      data_json=_script_json(data),
     )
 
     out_dir = output_dir or (Path.home() / ".cleanwave")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"dryrun_{stamp}.html"
-    out_path.write_text(html, encoding="utf-8")
+    out_path.write_text(page_html, encoding="utf-8")
     webbrowser.open(out_path.as_uri())
     return out_path

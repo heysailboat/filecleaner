@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from .models import FileInfo, FileDecision, Destination
+from .html_utils import _script_json
 
 
 def _size_str(size: int) -> str:
@@ -378,7 +379,7 @@ def run_confirm(
     port: int = 7234,
 ) -> list[tuple[FileInfo, FileDecision]] | None:
     data = _serialize(actionable)
-    page = _PAGE.format(data_json=json.dumps(data, ensure_ascii=False))
+    page = _PAGE.format(data_json=_script_json(data))
 
     server = _ConfirmServer(page, port)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
