@@ -102,6 +102,8 @@ def _parse_since(value: str) -> float:
 
 def run_undo(report_dir: Path) -> None:
     """Find the most recent JSON sidecar and restore all files in it."""
+    from .mover import _resolve_collision
+    
     sidecars = sorted(report_dir.glob("cleanwave_*.json"), reverse=True)
 
     if not sidecars:
@@ -144,14 +146,49 @@ def run_undo(report_dir: Path) -> None:
     restored, failed = 0, 0
     ui.print_section("Undoing")
 
+    home = Path.home()
+
     for entry in records:
-        src  = Path(entry["moved_to"])
-        dest = Path(entry["original"])
+        # validate record structure before touching the filesystem
+        if not isinstance(entry, dict):
+            ui.console.print("  [yellow]⚠[/yellow] skipping malformed entry (not a dict)")
+            failed += 1
+            continue
+
+        moved_to = entry.get("moved_to")
+        original = entry.get("original")
+
+        if not isinstance(moved_to, str) or not isinstance(original, str):
+            ui.console.print("  [yellow]⚠[/yellow] skipping malformed entry (missing/invalid keys)")
+            failed += 1
+            continue
+
+        src  = Path(moved_to)
+        dest = Path(original)
+
+        # src must be under home — refuse to touch anything outside
+        try:
+            src.resolve().relative_to(home.resolve())
+        except ValueError:
+            ui.console.print(f"  [red]✗[/red] refusing: src outside home: {src}")
+            failed += 1
+            continue
+
+        # dest must also be under home
+        try:
+            dest.resolve().relative_to(home.resolve())
+        except ValueError:
+            ui.console.print(f"  [red]✗[/red] refusing: dest outside home: {dest}")
+            failed += 1
+            continue
 
         if not src.exists():
             ui.console.print(f"  [yellow]⚠[/yellow] already gone: {src.name}")
             failed += 1
             continue
+
+        # avoid silently overwriting anything already at the destination
+        dest = _resolve_collision(dest)
 
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)

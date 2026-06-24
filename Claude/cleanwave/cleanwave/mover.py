@@ -22,19 +22,22 @@ def _resolve_collision(dest: Path) -> Path:
         counter += 1
 
 
+def _safe_component(name: str) -> str:
+    """
+    Reduce an arbitrary string to a safe single path component.
+    Path('../../evil').name == 'evil' — strips all traversal.
+    Falls back to 'other' if the result is empty or a dot.
+    """
+    safe = Path(name).name
+    return safe if safe and safe not in (".", "..") else "other"
+
+
 def _dest_path(
     fi: FileInfo,
     dec: FileDecision,
     deletion_root: Path,
     old_files_root: Path,
 ) -> Path:
-    """
-    Build destination path.
-    Structure: <root>/<subcategory>/<relative-path-from-home>/<filename>
-
-    e.g. ~/Desktop/deletion_approval/installers/Downloads/old_app.dmg
-         ~/Desktop/OLD_FILES/images/Pictures/2021/photo.jpg
-    """
     home = Path.home()
     try:
         rel = fi.path.relative_to(home)
@@ -43,11 +46,18 @@ def _dest_path(
 
     base = deletion_root if dec.destination == Destination.DELETION_APPROVAL else old_files_root
 
-    # subcategory subfolder — falls back to "other" if empty
-    subdir = dec.subcategory or "other"
+    subdir   = _safe_component(dec.subcategory) if dec.subcategory else "other"
+    filename = _safe_component(dec.new_name)     if dec.new_name    else _safe_component(fi.path.name)
 
-    filename = dec.new_name if dec.new_name else fi.path.name
-    return base / subdir / rel.parent / filename
+    dest = base / subdir / rel.parent / filename
+
+    # Containment assertion — if somehow dest still escapes base, fall back
+    try:
+        dest.resolve().relative_to(base.resolve())
+    except ValueError:
+        dest = base / "other" / _safe_component(fi.path.name)
+
+    return dest
 
 
 def execute_moves(
