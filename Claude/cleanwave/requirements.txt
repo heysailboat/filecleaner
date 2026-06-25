@@ -1,8 +1,8 @@
-requests>=2.31.0
-rich>=13.7.0
-python-dotenv>=1.0.0
-plyer>=2.1.0
-pyyaml>=6.0.0
+requests~=2.34
+rich~=15.0
+python-dotenv~=1.2
+plyer~=2.1
+pyyaml~=6.0
 
 # Optional — enables .docx content reading for AI assessment
 # python-docx>=1.1.0
