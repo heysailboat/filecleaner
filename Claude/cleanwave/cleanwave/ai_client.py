@@ -23,6 +23,12 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL = "meta-llama/llama-3-8b-instruct:free"
 
 MAX_PREVIEW_CHARS = 300
+# ⚠ PRIVACY NOTE: file names, parent paths, and content previews for files
+# matching TEXT_EXTENSIONS are sent to the configured third-party AI provider
+# (Groq or OpenRouter). The whitelist in rules.py keeps obvious secret files
+# (*.key, *password*, etc.) out of the flagged set, but non-whitelisted config
+# or script files flagged as old/vague may still have content previewed here.
+# A future local-AI mode will make this opt-in. See config.yaml for context.
 TEXT_EXTENSIONS = {
     ".txt", ".md", ".py", ".js", ".ts", ".html", ".css",
     ".json", ".xml", ".csv", ".yaml", ".yml", ".sh", ".bat",

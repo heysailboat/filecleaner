@@ -45,3 +45,14 @@ whitelist_patterns:
 # Absolute paths that are always skipped (entire subtree)
 # whitelist_paths:
 #   - "~/Documents/important"
+
+# ── Privacy ──────────────────────────────────────────────────────────────────
+# CleanWave sends the following to your configured AI provider (Groq/OpenRouter)
+# for files flagged by the rules engine:
+#   - file name and parent directory path
+#   - file size and last-activity date
+#   - up to 300 characters of content for text/code/config file types
+#
+# Files matching whitelist_patterns (above) are never sent.
+# Files outside the scanned directories are never touched.
+# A local AI option (no data leaves your machine) is planned for a future release.
