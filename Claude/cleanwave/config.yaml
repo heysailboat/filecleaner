@@ -25,7 +25,7 @@ ai_provider: "groq"
 ai_batch_size: 10
 
 # Parallel workers for file hashing
-hash_workers: 4
+hash_workers: 6
 
 # Glob patterns for files that should NEVER be touched
 whitelist_patterns:
